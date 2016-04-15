@@ -5,6 +5,8 @@
 #include <DallasTemperature.h>
 #include <TimeLib.h>
 
+#define RELAY1_PIN D3
+#define RELAY2_PIN D5
 // don't change these constants, override them in conf.h
 
 #define ONE_WIRE_BUS D4  // DS18B20 pin
@@ -119,7 +121,9 @@ String zeroPad(int in) {
   res += in;
   return res;
 }
-  
+String fullUrlWrite = String(API_BASE_URL) + "/cloud/api/site/" + String(API_DEVICE_NAME) + "/EMS";
+String fullUrlRead = String(API_BASE_URL) + "/cloud/api/site/" + String(API_DEVICE_NAME) + "/merged";
+
 void setup() {
   Serial.begin(115200);
   Serial.setDebugOutput(DEBUG_OUTPUT);
@@ -159,18 +163,81 @@ void setup() {
   Serial.println("\n1-Wire scan complete");
   oneWire.reset_search();
   DS18B20.begin();
+
+  Serial.print("PUT URL: ");
+  Serial.println(fullUrlWrite);
+
+  Serial.print("\nGET URL: ");
+  Serial.println(fullUrlRead);
+
+  pinMode(RELAY1_PIN, OUTPUT);
+  pinMode(RELAY2_PIN, OUTPUT);
 }
 
 unsigned long lastSentMillis = 0;
 
-String fullUrl = String(API_BASE_URL) + "/cloud/api/site/" + String(API_DEVICE_NAME) + "/EMS";
 DeviceAddress Probe01 = PROBE1_ADDRESS;
 DeviceAddress Probe02 = PROBE2_ADDRESS;
 
+boolean relayOn = false;
+
+String getXML() {
+  HTTPClient http;
+  
+  http.begin(fullUrlRead);
+  int httpGetCode = http.GET();
+  if(httpGetCode > 0) {
+    // HTTP header has been send and Server response header has been handled
+    Serial.printf("GET returned code: %d\n", httpGetCode);
+
+    // file found at server
+    if(httpGetCode == HTTP_CODE_OK) {
+      String payload = http.getString();
+      http.end();
+      Serial.println("GET Received:");
+      Serial.println(payload);
+      Serial.println();
+      return payload;
+    }
+  }
+  Serial.printf("GET failed, error: %s\n", http.errorToString(httpGetCode).c_str());
+  http.end();
+  return "";
+}
+
+String firstGet = "";
+float satSpToEmsIn = -1;
+float satSpToEmsOut = 70;
+
 void loop() {
+  HTTPClient http;
+  
   if ( (millis() - lastSentMillis) < ( (API_SEND_EVERY_SECONDS) * 1000 ) ) {
     return;
   }
+
+  String preGet = getXML();
+
+  if (preGet == "") {
+    delay(1000);
+    return;
+  }
+
+  int idx = preGet.indexOf("SatSpToEMS");
+  if (idx >=0) {
+    String chunk = preGet.substring(idx+40, idx+40+10);
+    int idx2 = chunk.indexOf("\"");
+    if (idx2 >=0) {
+      String chunk2 = chunk.substring(0,idx2);
+      satSpToEmsIn = chunk2.toFloat();
+    }
+  }
+
+  Serial.print("SAT SP TO EMS IN: ");
+  Serial.println(String(satSpToEmsIn));
+
+  Serial.print("SAT SP TO EMS OUT: ");
+  Serial.println(String(satSpToEmsOut));
   
   String curDate = getISO8601();
   if (curDate == "") {
@@ -180,25 +247,43 @@ void loop() {
   
   DS18B20.requestTemperatures();
 
-  float temp = DS18B20.getTempF(Probe01);
-  float temp2 = DS18B20.getTempF(Probe02);
+  float rat = DS18B20.getTempF(Probe01);
+  float sat = DS18B20.getTempF(Probe02);
     
-  Serial.print("Temperature: ");
-  Serial.println(temp);
-  Serial.println(temp2);
+  Serial.print("RAT Temp: ");
+  Serial.println(rat);
+  Serial.print("SAT Temp: ");
+  Serial.println(sat);
 
-  String xml = "<?xml version=\"1.0\"?>\n<LCS timestamp=\"" + curDate + "\" vendorVersion=\"2016.4.8.999\">" + 
-    "<data n=\"\"><p n=\"" + String(API_DEVICE_NAME) + "\"><p n=\"IntegrationPoints\"><p n=\"Ahu01\">" +
-    "<p n=\"Rat\"><p n=\"in10\"><p n=\"value\" v=\"" + temp + "\"/></p></p>" + 
-    "<p n=\"Sat\"><p n=\"in10\"><p n=\"value\" v=\"" + temp2 + "\"/></p></p>" + 
+  String cloudAhuState = "0";
+  
+  if (sat > satSpToEmsIn) {
+    cloudAhuState = "6";
+  }
+
+  String xml = "<LCS timestamp=\"" + curDate + "\" vendorVersion=\"2016.4.8.999\">" + 
+    "<data n=\"\"><p n=\"" + String(API_DEVICE_NAME) + "\"><p n=\"IntegrationPoints\"><p n=\"Ahu02\">" +
+    "<p n=\"Rat\"><p n=\"in10\"><p n=\"value\" v=\"" + rat + "\"/></p></p>" + 
+    "<p n=\"Sat\"><p n=\"in10\"><p n=\"value\" v=\"" + sat + "\"/></p></p>" + 
+    "<p n=\"SatSpToEMS\"><p n=\"in10\"><p n=\"value\" v=\"" + String(satSpToEmsOut) + "\"/></p></p>" + 
+    "<p n=\"SatSpFromEMS\"><p n=\"in10\"><p n=\"value\" v=\"" + String(satSpToEmsOut+0.2) + "\"/></p></p>" + 
+    "<p n=\"CloudAhuState\"><p n=\"in10\"><p n=\"value\" v=\"" + cloudAhuState + "@{EE$20INACTIVE=0,WARMUP=2,STARTUP=4,EE$20ACTIVE=6,RESET$20ENABLED=8}\"/></p></p>" + 
     "</p></p></p></data></LCS>";
 
+  Serial.println("PUTting XML:");
   Serial.println(xml);
+  Serial.println();
   
-  HTTPClient http;
-  http.begin(fullUrl);
+  http.begin(fullUrlWrite);
   http.addHeader("Content-Type", "text/xml");
-  http.sendRequest("PUT", xml);
+  int httpPutCode = http.sendRequest("PUT", xml);
+  Serial.printf("PUT returned code: %d\n", httpPutCode);
+  if(httpPutCode == HTTP_CODE_OK) {
+    String payload = http.getString();
+    Serial.println("PUT Received:");
+    Serial.println(payload);
+    Serial.println();
+  }
   http.end();
 
   lastSentMillis = millis();
