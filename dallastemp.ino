@@ -5,8 +5,7 @@
 #include <DallasTemperature.h>
 #include <TimeLib.h>
 
-#define RELAY1_PIN D3
-#define RELAY2_PIN D5
+#define RELAY1_PIN D5
 // don't change these constants, override them in conf.h
 
 #define ONE_WIRE_BUS D4  // DS18B20 pin
@@ -125,6 +124,9 @@ String fullUrlWrite = String(API_BASE_URL) + "/cloud/api/site/" + String(API_DEV
 String fullUrlRead = String(API_BASE_URL) + "/cloud/api/site/" + String(API_DEVICE_NAME) + "/merged";
 
 void setup() {
+  pinMode(RELAY1_PIN, OUTPUT);
+  digitalWrite(RELAY1_PIN, HIGH);
+  
   Serial.begin(115200);
   Serial.setDebugOutput(DEBUG_OUTPUT);
   
@@ -169,17 +171,12 @@ void setup() {
 
   Serial.print("\nGET URL: ");
   Serial.println(fullUrlRead);
-
-  pinMode(RELAY1_PIN, OUTPUT);
-  pinMode(RELAY2_PIN, OUTPUT);
 }
 
 unsigned long lastSentMillis = 0;
 
 DeviceAddress Probe01 = PROBE1_ADDRESS;
 DeviceAddress Probe02 = PROBE2_ADDRESS;
-
-boolean relayOn = false;
 
 String getXML() {
   HTTPClient http;
@@ -206,8 +203,8 @@ String getXML() {
 }
 
 String firstGet = "";
-float satSpToEmsIn = -1;
-float satSpToEmsOut = 70;
+float cv = 0;
+float ratSpFixedIn = 10.10;
 
 void loop() {
   HTTPClient http;
@@ -223,22 +220,19 @@ void loop() {
     return;
   }
 
-  int idx = preGet.indexOf("SatSpToEMS");
+  int idx = preGet.indexOf("RatSpFixed");
   if (idx >=0) {
     String chunk = preGet.substring(idx+40, idx+40+10);
     int idx2 = chunk.indexOf("\"");
     if (idx2 >=0) {
       String chunk2 = chunk.substring(0,idx2);
-      satSpToEmsIn = chunk2.toFloat();
+      ratSpFixedIn = chunk2.toFloat();
     }
   }
 
-  Serial.print("SAT SP TO EMS IN: ");
-  Serial.println(String(satSpToEmsIn));
+  Serial.print("RAT SP IN: ");
+  Serial.println(String(ratSpFixedIn));
 
-  Serial.print("SAT SP TO EMS OUT: ");
-  Serial.println(String(satSpToEmsOut));
-  
   String curDate = getISO8601();
   if (curDate == "") {
     delay(500);
@@ -255,20 +249,46 @@ void loop() {
   Serial.print("SAT Temp: ");
   Serial.println(sat);
 
-  String cloudAhuState = "0";
-  
-  if (sat > satSpToEmsIn) {
-    cloudAhuState = "6";
+  if (rat > ratSpFixedIn) {
+    cv = 100;
+    digitalWrite(RELAY1_PIN, LOW);
+    Serial.println("Driving relay LOW");
+  } else {
+    cv = 0;
+    digitalWrite(RELAY1_PIN, HIGH);
+    Serial.println("Driving relay HIGH");
   }
+  float ssp = 0; float satSpFromEms = 0; float sspSpFromEms = 0; String supplyFanProof = "true"; float supplyFanSpeed = 0; float chwSupTemp = 0;
 
   String xml = "<LCS timestamp=\"" + curDate + "\" vendorVersion=\"2016.4.8.999\">" + 
-    "<data n=\"\"><p n=\"" + String(API_DEVICE_NAME) + "\"><p n=\"IntegrationPoints\"><p n=\"Ahu02\">" +
-    "<p n=\"Rat\"><p n=\"in10\"><p n=\"value\" v=\"" + rat + "\"/></p></p>" + 
-    "<p n=\"Sat\"><p n=\"in10\"><p n=\"value\" v=\"" + sat + "\"/></p></p>" + 
-    "<p n=\"SatSpToEMS\"><p n=\"in10\"><p n=\"value\" v=\"" + String(satSpToEmsOut) + "\"/></p></p>" + 
-    "<p n=\"SatSpFromEMS\"><p n=\"in10\"><p n=\"value\" v=\"" + String(satSpToEmsOut+0.2) + "\"/></p></p>" + 
-    "<p n=\"CloudAhuState\"><p n=\"in10\"><p n=\"value\" v=\"" + cloudAhuState + "@{EE$20INACTIVE=0,WARMUP=2,STARTUP=4,EE$20ACTIVE=6,RESET$20ENABLED=8}\"/></p></p>" + 
-    "</p></p></p></data></LCS>";
+    "<data n=\"\"><p n=\"" + String(API_DEVICE_NAME) + "\">" +
+      "<p n=\"IntegrationPoints\">" + 
+        "<p n=\"Ahu03\">" +
+          "<p n=\"Rat\"><p n=\"in10\"><p n=\"value\" v=\"" + String(rat) + "\"/></p></p>" + 
+          "<p n=\"Sat\"><p n=\"in10\"><p n=\"value\" v=\"" + String(sat) + "\"/></p></p>" + 
+          "<p n=\"Ssp\"><p n=\"in10\"><p n=\"value\" v=\"" + String(ssp) + "\"/></p></p>" + 
+          "<p n=\"SatSpFromEMS\"><p n=\"in10\"><p n=\"value\" v=\"" + String(satSpFromEms) + "\"/></p></p>" + 
+          "<p n=\"SspSpFromEMS\"><p n=\"in10\"><p n=\"value\" v=\"" + String(sspSpFromEms) + "\"/></p></p>" + 
+          "<p n=\"Cv\"><p n=\"in10\"><p n=\"value\" v=\"" + String(cv) + "\"/></p></p>" + 
+          "<p n=\"SfPrf\"><p n=\"in10\"><p n=\"value\" v=\"" + supplyFanProof + "\"/></p></p>" + 
+          "<p n=\"SfSpd\"><p n=\"in10\"><p n=\"value\" v=\"" + String(supplyFanSpeed) + "\"/></p></p>" + 
+        "</p>" +
+        "<p n=\"Plant\">" +
+          "<p n=\"plantInputs\">" +
+            "<p n=\"ChwSupTemp\"><p n=\"in10\"><p n=\"value\" v=\"" + String(chwSupTemp) + "\"/></p></p>" +
+          "</p>" +
+        "</p>" +
+      "</p>" + 
+      "<p n=\"Graphics\">" +
+        "<p n=\"Ahu03\">" +
+          "<p n=\"Points\">" +
+            "<p n=\"common\">" +
+              "<p n=\"RatSpFixed\"><p n=\"in10\"><p n=\"value\" v=\"" + String(ratSpFixedIn) + "\"/></p></p>" +
+            "</p>" +
+          "</p>" +
+        "</p>" +
+      "</p>" +
+    "</p></data></LCS>";
 
   Serial.println("PUTting XML:");
   Serial.println(xml);
@@ -278,12 +298,12 @@ void loop() {
   http.addHeader("Content-Type", "text/xml");
   int httpPutCode = http.sendRequest("PUT", xml);
   Serial.printf("PUT returned code: %d\n", httpPutCode);
-  if(httpPutCode == HTTP_CODE_OK) {
+  //if(httpPutCode == HTTP_CODE_OK) {
     String payload = http.getString();
     Serial.println("PUT Received:");
     Serial.println(payload);
     Serial.println();
-  }
+  //}
   http.end();
 
   lastSentMillis = millis();
