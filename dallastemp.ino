@@ -229,6 +229,9 @@ void loop() {
       ratSpFixedIn = chunk2.toFloat();
     }
   }
+  
+  //ratSpFixedIn = 77.0;
+  //Serial.println("overriding ratSpFixedIn");
 
   Serial.print("RAT SP IN: ");
   Serial.println(String(ratSpFixedIn));
@@ -248,15 +251,17 @@ void loop() {
   Serial.println(rat);
   Serial.print("SAT Temp: ");
   Serial.println(sat);
-
-  if (rat > ratSpFixedIn) {
+  
+  if (rat < (ratSpFixedIn-0.5)) {
     cv = 100;
     digitalWrite(RELAY1_PIN, LOW);
     Serial.println("Driving relay LOW");
-  } else {
+  } else if (rat > (ratSpFixedIn+0.5)) {
     cv = 0;
     digitalWrite(RELAY1_PIN, HIGH);
     Serial.println("Driving relay HIGH");
+  } else {
+    Serial.println("In dead band, not doing anything");
   }
   float ssp = 0; float satSpFromEms = 0; float sspSpFromEms = 0; String supplyFanProof = "true"; float supplyFanSpeed = 0; float chwSupTemp = 0;
 
@@ -270,6 +275,7 @@ void loop() {
           "<p n=\"SatSpFromEMS\"><p n=\"in10\"><p n=\"value\" v=\"" + String(satSpFromEms) + "\"/></p></p>" + 
           "<p n=\"SspSpFromEMS\"><p n=\"in10\"><p n=\"value\" v=\"" + String(sspSpFromEms) + "\"/></p></p>" + 
           "<p n=\"Cv\"><p n=\"in10\"><p n=\"value\" v=\"" + String(cv) + "\"/></p></p>" + 
+          "<p n=\"Hv\"><p n=\"in10\"><p n=\"value\" v=\"" + String(cv) + "\"/></p></p>" + 
           "<p n=\"SfPrf\"><p n=\"in10\"><p n=\"value\" v=\"" + supplyFanProof + "\"/></p></p>" + 
           "<p n=\"SfSpd\"><p n=\"in10\"><p n=\"value\" v=\"" + String(supplyFanSpeed) + "\"/></p></p>" + 
         "</p>" +
